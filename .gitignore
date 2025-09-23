@@ -1,0 +1,33 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock for libraries
+Cargo.lock
+
+# ESP-IDF build artifacts
+.embuild/
+
+# espup installer
+espup-*
+
+# Build outputs
+*.bin
+*.elf
+*.map
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debug files
+*.dSYM/
+
+# Claude
+.claude/
+
