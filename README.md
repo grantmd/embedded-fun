@@ -1,6 +1,6 @@
 # Embedded Fun
 
-I bought an SparkFun Thing Plus - ESP32 WROOM (USB-C) and am learning how to write software for it in Rust using the no_std esp-hal library.
+I bought a SparkFun Thing Plus - ESP32 WROOM (USB-C) and am learning how to write software for it in Rust using the no_std esp-hal library.
 
 ## Prerequisites
 

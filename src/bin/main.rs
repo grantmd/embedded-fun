@@ -11,6 +11,13 @@ use esp_hal::uart::{Config as UartConfig, Uart, UartRx};
 use esp_hal::Blocking;
 use esp_storage::FlashStorage;
 use heapless::String;
+use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
+use smoltcp::phy::ChecksumCapabilities;
+use smoltcp::socket::{dhcpv4, raw};
+use smoltcp::time::Instant as SmoltcpInstant;
+use smoltcp::wire::{
+    HardwareAddress, Icmpv4Repr, IpAddress, IpCidr, IpProtocol, IpVersion, Ipv4Address,
+};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -229,7 +236,7 @@ fn main() -> ! {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let wifi_init = esp_wifi::init(timg0.timer0, esp_hal::rng::Rng::new(peripherals.RNG)).unwrap();
-    let (mut wifi_controller, mut _ifaces) =
+    let (mut wifi_controller, mut wifi_ifaces) =
         esp_wifi::wifi::new(&wifi_init, peripherals.WIFI).unwrap();
 
     wifi_controller.set_configuration(&wifi_config).unwrap();
@@ -332,22 +339,157 @@ fn main() -> ! {
         panic!("WiFi connection failed");
     }
 
-    // Demonstrate the credential management working
-    let mut counter = 0u32;
+    // Set up networking with smoltcp directly
+    esp_println::println!("\n🌐 Setting up network stack with DHCP...");
+
+    // Create smoltcp interface
+    let mut wifi_device = wifi_ifaces.sta;
+    let ethernet_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(
+        &wifi_device.mac_address(),
+    ));
+    let config = Config::new(ethernet_addr);
+    let mut iface = Interface::new(config, &mut wifi_device, SmoltcpInstant::from_millis(0));
+
+    // Set up sockets
+    let mut socket_storage = [SocketStorage::EMPTY; 2];
+    let mut sockets = SocketSet::new(&mut socket_storage[..]);
+
+    // Create DHCP socket
+    let dhcp_socket = dhcpv4::Socket::new();
+    let dhcp_handle = sockets.add(dhcp_socket);
+
+    // Create raw socket for ICMP ping
+    let mut raw_rx_buffer = [0; 1500];
+    let mut raw_tx_buffer = [0; 1500];
+    let mut raw_rx_metadata = [raw::PacketMetadata::EMPTY; 4];
+    let mut raw_tx_metadata = [raw::PacketMetadata::EMPTY; 4];
+
+    let raw_socket = raw::Socket::new(
+        IpVersion::Ipv4,
+        IpProtocol::Icmp,
+        raw::PacketBuffer::new(&mut raw_rx_metadata[..], &mut raw_rx_buffer[..]),
+        raw::PacketBuffer::new(&mut raw_tx_metadata[..], &mut raw_tx_buffer[..]),
+    );
+    let raw_handle = sockets.add(raw_socket);
+
+    esp_println::println!("📡 Starting DHCP client...");
+
+    let mut dhcp_configured = false;
+    let mut ping_sequence = 0u16;
+    let mut last_ping_ms = 0i64;
+    let ping_target = Ipv4Address::new(8, 8, 8, 8);
+    let mut counter = 0u64;
+
     loop {
-        let delay_start = Instant::now();
-        while delay_start.elapsed() < Duration::from_millis(10000) {}
-
         counter += 1;
-        esp_println::println!(
-            "[{}m] ⚡ System running - Connected to '{}', RSSI: {} dBm",
-            counter * 10 / 60,
-            credentials.ssid,
-            wifi_controller.rssi().unwrap(),
-        );
+        let timestamp = SmoltcpInstant::from_millis(counter as i64);
 
-        if counter % 12 == 0 {
-            esp_println::println!("[{}m] It has been another two minutes.", counter * 10 / 60,);
+        // Poll the interface
+        let poll_result = iface.poll(timestamp, &mut wifi_device, &mut sockets);
+
+        // Handle DHCP
+        let dhcp_socket = sockets.get_mut::<dhcpv4::Socket>(dhcp_handle);
+        match dhcp_socket.poll() {
+            None => {}
+            Some(dhcpv4::Event::Configured(config)) => {
+                if !dhcp_configured {
+                    esp_println::println!("✅ DHCP configuration obtained!");
+                    esp_println::println!("  IP Address: {}", config.address);
+                    esp_println::println!("  Gateway: {:?}", config.router);
+                    esp_println::println!("  DNS: {:?}", config.dns_servers);
+
+                    // Configure interface with obtained IP
+                    iface.update_ip_addrs(|addrs| {
+                        addrs
+                            .push(IpCidr::new(IpAddress::Ipv4(config.address.address()), 24))
+                            .ok();
+                    });
+
+                    if let Some(gateway) = config.router {
+                        iface.routes_mut().add_default_ipv4_route(gateway).unwrap();
+                    }
+
+                    dhcp_configured = true;
+                    esp_println::println!("\n🏓 Starting ping test to 8.8.8.8...");
+                }
+            }
+            Some(dhcpv4::Event::Deconfigured) => {
+                esp_println::println!("⚠️  DHCP lease expired, renewing...");
+                dhcp_configured = false;
+            }
         }
+
+        // Send pings if we have IP configured
+        if dhcp_configured && timestamp.millis() - last_ping_ms > 2000 {
+            ping_sequence = ping_sequence.wrapping_add(1);
+
+            let raw_socket = sockets.get_mut::<raw::Socket>(raw_handle);
+
+            // Build ICMP echo request
+            let icmp_repr = Icmpv4Repr::EchoRequest {
+                ident: 0x1234,
+                seq_no: ping_sequence,
+                data: b"esp32-ping",
+            };
+
+            let mut packet_buffer = [0u8; 64];
+            let packet_len = icmp_repr.buffer_len();
+
+            if packet_len <= packet_buffer.len() {
+                let mut packet =
+                    smoltcp::wire::Icmpv4Packet::new_unchecked(&mut packet_buffer[..packet_len]);
+                let checksum_caps = ChecksumCapabilities::default();
+                icmp_repr.emit(&mut packet, &checksum_caps);
+
+                match raw_socket.send_slice(&packet_buffer[..packet_len]) {
+                    Ok(_) => {
+                        esp_println::print!("Ping #{} sent to {}... ", ping_sequence, ping_target);
+                        last_ping_ms = timestamp.millis();
+                    }
+                    Err(e) => {
+                        esp_println::println!("Failed to send ping: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        // Check for ping responses
+        if dhcp_configured {
+            let raw_socket = sockets.get_mut::<raw::Socket>(raw_handle);
+            if raw_socket.can_recv() {
+                let mut buffer = [0u8; 256];
+                match raw_socket.recv_slice(&mut buffer) {
+                    Ok(size) => {
+                        if size >= 8 {
+                            let icmp_packet =
+                                smoltcp::wire::Icmpv4Packet::new_unchecked(&buffer[..size]);
+                            let checksum_caps = ChecksumCapabilities::default();
+                            if let Ok(icmp_repr) = Icmpv4Repr::parse(&icmp_packet, &checksum_caps) {
+                                match icmp_repr {
+                                    Icmpv4Repr::EchoReply {
+                                        ident,
+                                        seq_no,
+                                        data: _,
+                                    } if ident == 0x1234 => {
+                                        esp_println::println!(
+                                            "Reply from {}: seq={} bytes={}",
+                                            ping_target,
+                                            seq_no,
+                                            size
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+
+        // Small delay
+        let delay_start = Instant::now();
+        while delay_start.elapsed() < Duration::from_millis(1) {}
     }
 }
