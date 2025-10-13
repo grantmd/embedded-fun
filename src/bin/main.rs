@@ -247,7 +247,10 @@ async fn ping_task(stack: &'static embassy_net::Stack<'static>) {
 
         seq = seq.wrapping_add(1);
 
-        match stack.dns_query("8.8.8.8", embassy_net::dns::DnsQueryType::A).await {
+        match stack
+            .dns_query("8.8.8.8", embassy_net::dns::DnsQueryType::A)
+            .await
+        {
             Ok(_) => {
                 esp_println::println!("Ping #{}: 8.8.8.8 is reachable (via DNS query)", seq);
             }
@@ -304,7 +307,11 @@ async fn main(spawner: Spawner) {
     esp_hal_embassy::init(timg0.timer0);
 
     // Initialize status LED on GPIO13
-    let led = Output::new(peripherals.GPIO13, esp_hal::gpio::Level::Low, Default::default());
+    let led = Output::new(
+        peripherals.GPIO13,
+        esp_hal::gpio::Level::Low,
+        Default::default(),
+    );
     static LED_REF: static_cell::StaticCell<Output<'static>> = static_cell::StaticCell::new();
     let led_ref = LED_REF.init(led);
 
@@ -321,8 +328,10 @@ async fn main(spawner: Spawner) {
     });
 
     let timg1 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG1);
-    static WIFI_INIT: static_cell::StaticCell<esp_wifi::EspWifiController> = static_cell::StaticCell::new();
-    let wifi_init = WIFI_INIT.init(esp_wifi::init(timg1.timer0, esp_hal::rng::Rng::new(peripherals.RNG)).unwrap());
+    static WIFI_INIT: static_cell::StaticCell<esp_wifi::EspWifiController> =
+        static_cell::StaticCell::new();
+    let wifi_init = WIFI_INIT
+        .init(esp_wifi::init(timg1.timer0, esp_hal::rng::Rng::new(peripherals.RNG)).unwrap());
 
     let (mut controller, wifi_interfaces) =
         esp_wifi::wifi::new(wifi_init, peripherals.WIFI).unwrap();
@@ -334,16 +343,20 @@ async fn main(spawner: Spawner) {
     let config = embassy_net::Config::dhcpv4(dhcp_config);
 
     // Allocate stack resources statically
-    static RESOURCES: static_cell::StaticCell<embassy_net::StackResources<3>> = static_cell::StaticCell::new();
+    static RESOURCES: static_cell::StaticCell<embassy_net::StackResources<3>> =
+        static_cell::StaticCell::new();
     let resources = RESOURCES.init(embassy_net::StackResources::<3>::new());
 
     let seed = 1234u64; // Simple seed, could be improved with RNG
     let (stack, runner) = embassy_net::new(wifi_interfaces.sta, config, resources, seed);
 
-    static STACK_REF: static_cell::StaticCell<embassy_net::Stack<'static>> = static_cell::StaticCell::new();
+    static STACK_REF: static_cell::StaticCell<embassy_net::Stack<'static>> =
+        static_cell::StaticCell::new();
     let stack_ref = STACK_REF.init(stack);
 
-    static RUNNER_REF: static_cell::StaticCell<embassy_net::Runner<'static, esp_wifi::wifi::WifiDevice<'static>>> = static_cell::StaticCell::new();
+    static RUNNER_REF: static_cell::StaticCell<
+        embassy_net::Runner<'static, esp_wifi::wifi::WifiDevice<'static>>,
+    > = static_cell::StaticCell::new();
     let runner_ref = RUNNER_REF.init(runner);
 
     // Spawn network task
