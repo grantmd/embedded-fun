@@ -17,32 +17,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+      - name: Setup ESP-IDF Rust toolchain
+        uses: esp-rs/xtensa-toolchain@v1.5
         with:
-          toolchain: stable
-          components: rust-src
+          default: true
+          ldproxy: true
 
-      - name: Install espup
-        run: |
-          cargo install espup --locked
-          espup install
-
-      - name: Source ESP environment and build
-        run: |
-          source ~/export-esp.sh
-          cargo build --release
+      - name: Build
+        run: cargo build --release
 
       - name: Check formatting
-        run: |
-          source ~/export-esp.sh
-          cargo fmt -- --check
+        run: cargo fmt -- --check
         continue-on-error: true
 
       - name: Run clippy
-        run: |
-          source ~/export-esp.sh
-          cargo clippy -- -D warnings
+        run: cargo clippy -- -D warnings
         continue-on-error: true
 
   build-matrix:
@@ -56,11 +45,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
+      - name: Setup ESP-IDF Rust toolchain
+        uses: esp-rs/xtensa-toolchain@v1.5
         with:
-          toolchain: stable
-          components: rust-src
+          default: true
+          ldproxy: true
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -73,17 +62,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install espup
-        run: |
-          cargo install espup --locked
-          espup install
-
       - name: Build
-        run: |
-          source ~/export-esp.sh
-          cargo build
+        run: cargo build
 
       - name: Build release
-        run: |
-          source ~/export-esp.sh
-          cargo build --release
+        run: cargo build --release
