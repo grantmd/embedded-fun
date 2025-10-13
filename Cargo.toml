@@ -11,34 +11,28 @@ path = "./src/bin/main.rs"
 [dependencies]
 esp-bootloader-esp-idf = { version = "0.2.0", features = ["esp32"] }
 esp-hal                = { version = "=1.0.0-rc.0", features = ["esp32", "unstable"] }
+esp-hal-embassy        = { version = "=0.9.0", features = ["esp32"] }
 
 critical-section = "1.2.0"
-embedded-io = "0.6.1"
+embedded-io-async = "0.6.1"
 esp-alloc = "0.8.0"
 esp-println = { version = "0.14", features = ["esp32"] }
 esp-wifi = { version = "0.15.0", features = [
-  "builtin-scheduler",
   "esp-alloc",
   "esp32",
-  "smoltcp",
   "wifi",
 ] }
 esp-storage = { version = "0.5.0", features = ["esp32"] }
 embedded-storage = "0.3.1"
 heapless = "0.8.0"
-smoltcp = { version = "0.12.0", default-features = false, features = [
-  "medium-ethernet",
-  "multicast",
-  "proto-dhcpv4",
-  "proto-dns",
-  "proto-ipv4",
-  "socket-dhcpv4",
-  "socket-dns",
-  "socket-icmp",
-  "socket-raw",
-  "socket-tcp",
-  "socket-udp",
-] }
+
+# Embassy dependencies
+embassy-executor = { version = "0.7", features = ["task-arena-size-32768"] }
+embassy-time = "0.4"
+embassy-sync = "0.6"
+embassy-net = { version = "0.6", features = ["dhcpv4", "tcp", "udp", "dns", "proto-ipv4", "medium-ethernet"] }
+embassy-futures = "0.1"
+static_cell = "2.1"
 
 
 [profile.dev]
