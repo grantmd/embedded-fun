@@ -131,7 +131,7 @@ fn read_line_from_uart(rx: &mut UartRx<'_, Blocking>, buffer: &mut [u8], prompt:
                 continue;
             }
 
-            if pos < buffer.len() - 1 && ch >= 32 && ch <= 126 {
+            if pos < buffer.len() - 1 && (32..=126).contains(&ch) {
                 buffer[pos] = ch;
                 pos += 1;
                 esp_println::print!("{}", ch as char);
@@ -275,7 +275,11 @@ async fn main(spawner: Spawner) {
                 None => {
                     esp_println::println!("Failed to get credentials from user");
                     esp_println::println!("System halted. Please reset to try again.");
-                    loop {}
+                    #[allow(clippy::empty_loop)]
+                    loop {
+                        // Halt execution - intentionally empty loop
+                        // We can't use panic!() here as we want a clean halt message
+                    }
                 }
             }
         }
