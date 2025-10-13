@@ -7,6 +7,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use embedded_storage::{ReadStorage, Storage};
+use esp_hal::gpio::Output;
 use esp_hal::uart::UartRx;
 use esp_hal::Blocking;
 use esp_storage::FlashStorage;
@@ -176,8 +177,21 @@ fn get_credentials_from_user(rx: &mut UartRx<'_, Blocking>) -> Option<WifiCreden
     Some(creds)
 }
 
-// Signal to notify ping task that network is ready
+// Signal to notify tasks that WiFi network is ready
 static WIFI_CONNECTED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+#[embassy_executor::task]
+async fn led_blink_task(mut led: Output<'static>) {
+    // Wait for WiFi to be connected before blinking
+    WIFI_CONNECTED.wait().await;
+
+    esp_println::println!("LED blink task started - WiFi connected!");
+
+    loop {
+        led.toggle();
+        Timer::after(Duration::from_millis(500)).await;
+    }
+}
 
 #[embassy_executor::task]
 async fn wifi_task(stack: &'static embassy_net::Stack<'static>) {
@@ -289,6 +303,11 @@ async fn main(spawner: Spawner) {
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
 
+    // Initialize status LED on GPIO13
+    let led = Output::new(peripherals.GPIO13, esp_hal::gpio::Level::Low, Default::default());
+    static LED_REF: static_cell::StaticCell<Output<'static>> = static_cell::StaticCell::new();
+    let led_ref = LED_REF.init(led);
+
     // Initialize WiFi
     esp_println::println!("\nInitializing WiFi hardware...");
     use alloc::string::String as AllocString;
@@ -336,6 +355,10 @@ async fn main(spawner: Spawner) {
 
     // Spawn ping task (will wait for WiFi connection)
     spawner.spawn(ping_task(stack_ref)).ok();
+
+    // Spawn LED blink task (will wait for WiFi connection)
+    let led_owned = unsafe { core::ptr::read(led_ref as *const _) };
+    spawner.spawn(led_blink_task(led_owned)).ok();
 
     // Configure and start WiFi
     controller.set_configuration(&wifi_config).unwrap();
