@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Avoid 403s from the github API when configuring esp-rs/xtensa-toolchain
 
 jobs:
   build:
