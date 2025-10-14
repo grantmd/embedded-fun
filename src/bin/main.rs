@@ -217,6 +217,9 @@ async fn fuel_gauge_task(i2c_bus: &'static I2cBusBlocking) {
         }
     }
 
+    // Startup can be noisy, reset calculations
+    fuel_gauge.quickstart().unwrap();
+
     loop {
         // Read state of charge (SOC), voltage, and charge rate
         match fuel_gauge.soc() {
