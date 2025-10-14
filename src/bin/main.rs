@@ -223,10 +223,19 @@ async fn fuel_gauge_task(i2c_bus: &'static I2cBusBlocking) {
             Ok(soc) => match fuel_gauge.voltage() {
                 Ok(voltage) => match fuel_gauge.charge_rate() {
                     Ok(rate) => {
-                        esp_println::println!("Battery: {:.1}% | {:.3}V | {:.2}%/hr", soc, voltage, rate);
+                        esp_println::println!(
+                            "Battery: {:.1}% | {:.3}V | {:.2}%/hr",
+                            soc,
+                            voltage,
+                            rate
+                        );
                     }
                     Err(_) => {
-                        esp_println::println!("Battery: {:.1}% | {:.3}V | charge rate error", soc, voltage);
+                        esp_println::println!(
+                            "Battery: {:.1}% | {:.3}V | charge rate error",
+                            soc,
+                            voltage
+                        );
                     }
                 },
                 Err(_) => {
