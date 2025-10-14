@@ -177,19 +177,38 @@ fn get_credentials_from_user(rx: &mut UartRx<'_, Blocking>) -> Option<WifiCreden
     Some(creds)
 }
 
-// Signal to notify tasks that WiFi network is ready
+// Signals to notify tasks that WiFi network is ready
 static WIFI_CONNECTED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static NETWORK_CONNECTED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 #[embassy_executor::task]
 async fn led_blink_task(mut led: Output<'static>) {
-    // Wait for WiFi to be connected before blinking
-    WIFI_CONNECTED.wait().await;
-
-    esp_println::println!("LED blink task started - WiFi connected!");
-
+    // Blink while waiting for WiFi connection
     loop {
         led.toggle();
-        Timer::after(Duration::from_millis(500)).await;
+
+        // Use select to check both timeout and signal
+        match embassy_futures::select::select(
+            Timer::after(Duration::from_millis(250)),
+            NETWORK_CONNECTED.wait(),
+        )
+        .await
+        {
+            embassy_futures::select::Either::First(_) => {
+                // Timeout - continue blinking
+                continue;
+            }
+            embassy_futures::select::Either::Second(_) => {
+                // WiFi connected! Turn LED on solid
+                led.set_high();
+                break;
+            }
+        }
+    }
+
+    // Keep LED on solid
+    loop {
+        Timer::after(Duration::from_secs(60)).await;
     }
 }
 
@@ -197,7 +216,7 @@ async fn led_blink_task(mut led: Output<'static>) {
 async fn wifi_task(stack: &'static embassy_net::Stack<'static>) {
     loop {
         if stack.is_link_up() {
-            // Signal that WiFi is connected
+            // Signal that WiFi is connected to all waiting tasks
             WIFI_CONNECTED.signal(());
             break;
         }
@@ -245,6 +264,9 @@ async fn ping_task(stack: &'static embassy_net::Stack<'static>) {
             continue;
         }
 
+        // This probably means we have a network connection
+        NETWORK_CONNECTED.signal(());
+
         seq = seq.wrapping_add(1);
 
         match stack
@@ -259,7 +281,7 @@ async fn ping_task(stack: &'static embassy_net::Stack<'static>) {
             }
         }
 
-        Timer::after(Duration::from_secs(2)).await;
+        Timer::after(Duration::from_secs(60)).await;
     }
 }
 
@@ -315,6 +337,10 @@ async fn main(spawner: Spawner) {
     static LED_REF: static_cell::StaticCell<Output<'static>> = static_cell::StaticCell::new();
     let led_ref = LED_REF.init(led);
 
+    // Spawn LED blink task early (will blink during WiFi connection, then stay solid)
+    let led_owned = unsafe { core::ptr::read(led_ref as *const _) };
+    spawner.spawn(led_blink_task(led_owned)).ok();
+
     // Initialize WiFi
     esp_println::println!("\nInitializing WiFi hardware...");
     use alloc::string::String as AllocString;
@@ -368,10 +394,6 @@ async fn main(spawner: Spawner) {
 
     // Spawn ping task (will wait for WiFi connection)
     spawner.spawn(ping_task(stack_ref)).ok();
-
-    // Spawn LED blink task (will wait for WiFi connection)
-    let led_owned = unsafe { core::ptr::read(led_ref as *const _) };
-    spawner.spawn(led_blink_task(led_owned)).ok();
 
     // Configure and start WiFi
     controller.set_configuration(&wifi_config).unwrap();
