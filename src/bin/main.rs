@@ -218,27 +218,19 @@ async fn fuel_gauge_task(i2c_bus: &'static I2cBusBlocking) {
     }
 
     loop {
-        // Read state of charge (SOC) and voltage
+        // Read state of charge (SOC), voltage, and charge rate
         match fuel_gauge.soc() {
             Ok(soc) => match fuel_gauge.voltage() {
-                Ok(voltage) => {
-                    // Check for battery presence based on valid ranges
-                    // Li-ion/LiPo should be between 3.0V and 4.5V
-                    // SOC should not exceed 100%
-                    let battery_present = voltage >= 3.0 && voltage <= 4.5 && soc <= 100.0;
-
-                    if battery_present {
-                        esp_println::println!("Battery: {:.1}% | {:.3}V", soc, voltage);
-                    } else {
-                        esp_println::println!(
-                            "Battery: No valid battery detected (SOC: {:.1}%, V: {:.3}V)",
-                            soc,
-                            voltage
-                        );
+                Ok(voltage) => match fuel_gauge.charge_rate() {
+                    Ok(rate) => {
+                        esp_println::println!("Battery: {:.1}% | {:.3}V | {:.2}%/hr", soc, voltage, rate);
                     }
-                }
+                    Err(_) => {
+                        esp_println::println!("Battery: {:.1}% | {:.3}V | charge rate error", soc, voltage);
+                    }
+                },
                 Err(_) => {
-                    esp_println::println!("Battery: voltage read error");
+                    esp_println::println!("Battery: {:.1}% | voltage read error", soc);
                 }
             },
             Err(_) => {
