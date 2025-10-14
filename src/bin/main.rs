@@ -230,7 +230,11 @@ async fn fuel_gauge_task(i2c_bus: &'static I2cBusBlocking) {
                     if battery_present {
                         esp_println::println!("Battery: {:.1}% | {:.3}V", soc, voltage);
                     } else {
-                        esp_println::println!("Battery: No valid battery detected (SOC: {:.1}%, V: {:.3}V)", soc, voltage);
+                        esp_println::println!(
+                            "Battery: No valid battery detected (SOC: {:.1}%, V: {:.3}V)",
+                            soc,
+                            voltage
+                        );
                     }
                 }
                 Err(_) => {
