@@ -1,14 +1,21 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
 use core::str::from_utf8;
+use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use embedded_storage::{ReadStorage, Storage};
 use esp_hal::gpio::Output;
+use esp_hal::i2c::master::I2c;
 use esp_hal::uart::UartRx;
+use esp_hal::Async;
 use esp_hal::Blocking;
 use esp_storage::FlashStorage;
 use heapless::String;
@@ -22,6 +29,11 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 extern crate alloc;
 
 esp_bootloader_esp_idf::esp_app_desc!();
+
+// Type aliases for our shared I2C buses (async and blocking)
+type I2cBusAsync = Mutex<NoopRawMutex, I2c<'static, Async>>;
+type I2cBusBlocking = BlockingMutex<CriticalSectionRawMutex, RefCell<I2c<'static, Blocking>>>;
+type I2cProxy = I2cDevice<'static, NoopRawMutex, I2c<'static, Async>>;
 
 const WIFI_CREDS_OFFSET: u32 = 0x9000;
 const MAX_SSID_LEN: usize = 32;
@@ -182,6 +194,59 @@ static WIFI_CONNECTED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 static NETWORK_CONNECTED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 #[embassy_executor::task]
+async fn fuel_gauge_task(i2c_bus: &'static I2cBusBlocking) {
+    use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
+    use max170xx::Max17048;
+
+    esp_println::println!("Initializing MAX17048 fuel gauge...");
+
+    // Create I2C device proxy for this task
+    let i2c = I2cDevice::new(i2c_bus);
+
+    // Initialize the MAX17048
+    let mut fuel_gauge = Max17048::new(i2c);
+
+    // Try to read the version to verify communication
+    match fuel_gauge.version() {
+        Ok(version) => {
+            esp_println::println!("✓ MAX17048 detected, version: 0x{:04X}", version);
+        }
+        Err(_) => {
+            esp_println::println!("✗ Failed to communicate with MAX17048");
+            return;
+        }
+    }
+
+    loop {
+        // Read state of charge (SOC) and voltage
+        match fuel_gauge.soc() {
+            Ok(soc) => match fuel_gauge.voltage() {
+                Ok(voltage) => {
+                    // Check for battery presence based on valid ranges
+                    // Li-ion/LiPo should be between 3.0V and 4.5V
+                    // SOC should not exceed 100%
+                    let battery_present = voltage >= 3.0 && voltage <= 4.5 && soc <= 100.0;
+
+                    if battery_present {
+                        esp_println::println!("Battery: {:.1}% | {:.3}V", soc, voltage);
+                    } else {
+                        esp_println::println!("Battery: No valid battery detected (SOC: {:.1}%, V: {:.3}V)", soc, voltage);
+                    }
+                }
+                Err(_) => {
+                    esp_println::println!("Battery: voltage read error");
+                }
+            },
+            Err(_) => {
+                esp_println::println!("Battery: SOC read error");
+            }
+        }
+
+        Timer::after(Duration::from_secs(60)).await;
+    }
+}
+
+#[embassy_executor::task]
 async fn led_blink_task(mut led: Output<'static>) {
     // Blink while waiting for WiFi connection
     loop {
@@ -340,6 +405,24 @@ async fn main(spawner: Spawner) {
     // Spawn LED blink task early (will blink during WiFi connection, then stay solid)
     let led_owned = unsafe { core::ptr::read(led_ref as *const _) };
     spawner.spawn(led_blink_task(led_owned)).ok();
+
+    // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode for fuel gauge
+    esp_println::println!("Initializing I2C bus...");
+    let i2c_blocking = I2c::new(peripherals.I2C0, Default::default())
+        .unwrap()
+        .with_sda(peripherals.GPIO21)
+        .with_scl(peripherals.GPIO22);
+
+    // Wrap in a BlockingMutex + RefCell for sharing across multiple tasks
+    static I2C_BUS_BLOCKING: static_cell::StaticCell<I2cBusBlocking> =
+        static_cell::StaticCell::new();
+    let i2c_bus_blocking = I2C_BUS_BLOCKING.init(BlockingMutex::new(RefCell::new(i2c_blocking)));
+    esp_println::println!(
+        "✓ I2C bus initialized on GPIO21 (SDA) and GPIO22 (SCL) (blocking, shared)"
+    );
+
+    // Spawn fuel gauge task
+    spawner.spawn(fuel_gauge_task(i2c_bus_blocking)).ok();
 
     // Initialize WiFi
     esp_println::println!("\nInitializing WiFi hardware...");
