@@ -255,6 +255,99 @@ async fn fuel_gauge_task(i2c_bus: &'static I2cBusBlocking) {
 }
 
 #[embassy_executor::task]
+async fn gps_task(i2c_bus: &'static I2cBusBlocking) {
+    use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
+    use embedded_hal::i2c::I2c;
+    use ublox::Parser;
+
+    const GPS_ADDR: u8 = 0x42;
+    const REG_DATA_STREAM: u8 = 0xFF;
+    const REG_AVAIL_MSB: u8 = 0xFD;
+
+    esp_println::println!("Initializing MAX-M10S GPS...");
+
+    let mut i2c = I2cDevice::new(i2c_bus);
+    let mut parser = Parser::<ublox::FixedBuffer<512>>::new_fixed();
+
+    // Give GPS module time to boot up
+    Timer::after(Duration::from_secs(2)).await;
+
+    // Tickle the device to start I2C broadcasting by sending UBX-MON-VER command
+    // This command requests the device to send its version information
+    // Retry until successful
+    esp_println::println!("GPS: Sending initialization command...");
+    let init_cmd: [u8; 8] = [0xB5, 0x62, 0x0A, 0x04, 0x00, 0x00, 0x0E, 0x34];
+    loop {
+        match i2c.write(GPS_ADDR, &init_cmd) {
+            Ok(_) => {
+                esp_println::println!("GPS: Initialization command sent successfully");
+                break;
+            }
+            Err(e) => {
+                esp_println::println!("GPS: Failed to send init command: {:?}, retrying...", e);
+                Timer::after(Duration::from_millis(100)).await;
+            }
+        }
+    }
+
+    Timer::after(Duration::from_millis(100)).await;
+
+    esp_println::println!("GPS: Starting data polling...");
+
+    loop {
+        // Read the number of available bytes from REG_AVAIL_MSB (2 bytes, big-endian)
+        let mut avail_bytes = [0u8; 2];
+        match i2c.write_read(GPS_ADDR, &[REG_AVAIL_MSB], &mut avail_bytes) {
+            Ok(_) => {
+                let available = u16::from_be_bytes(avail_bytes) as usize;
+
+                if available > 0 {
+                    // Cap the read size to our buffer capacity
+                    let read_size = available.min(256);
+                    let mut buffer = [0u8; 256];
+
+                    // Read from REG_DATA_STREAM
+                    match i2c.write_read(GPS_ADDR, &[REG_DATA_STREAM], &mut buffer[..read_size]) {
+                        Ok(_) => {
+                            // Print raw bytes
+                            esp_println::print!("GPS: Received {} bytes", read_size);
+                            if available > read_size {
+                                esp_println::print!(" ({} available, truncated)", available);
+                            }
+                            esp_println::print!(": ");
+                            for i in 0..read_size {
+                                esp_println::print!("{:02X} ", buffer[i]);
+                            }
+                            esp_println::println!();
+
+                            // Parse UBX packets
+                            let mut packets = parser.consume_ubx(&buffer[..read_size]);
+
+                            // Print parsed packets
+                            while let Some(packet_result) = packets.next() {
+                                match packet_result {
+                                    Ok(packet) => {
+                                        esp_println::println!("GPS: Received packet: {:?}", packet);
+                                    }
+                                    Err(e) => {
+                                        esp_println::println!("GPS: Parser error: {:?}", e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
+        // Poll at reasonable interval
+        Timer::after(Duration::from_millis(250)).await;
+    }
+}
+
+#[embassy_executor::task]
 async fn led_blink_task(mut led: Output<'static>) {
     // Blink while waiting for WiFi connection
     loop {
@@ -414,9 +507,13 @@ async fn main(spawner: Spawner) {
     let led_owned = unsafe { core::ptr::read(led_ref as *const _) };
     spawner.spawn(led_blink_task(led_owned)).ok();
 
-    // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode for fuel gauge
+    // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode
+    // Using default frequency (should be 100kHz - MAX17048 supports up to 400kHz, MAX-M10S up to 320kHz)
     esp_println::println!("Initializing I2C bus...");
-    let i2c_blocking = I2c::new(peripherals.I2C0, Default::default())
+    use esp_hal::i2c::master::Config;
+    let i2c_config = Config::default();
+    esp_println::println!("I2C timeout: {:?}", i2c_config.timeout());
+    let i2c_blocking = I2c::new(peripherals.I2C0, i2c_config)
         .unwrap()
         .with_sda(peripherals.GPIO21)
         .with_scl(peripherals.GPIO22);
@@ -429,11 +526,28 @@ async fn main(spawner: Spawner) {
         "✓ I2C bus initialized on GPIO21 (SDA) and GPIO22 (SCL) (blocking, shared)"
     );
 
-    // Spawn fuel gauge task
+    // Perform I2C bus scan
+    esp_println::println!("\nScanning I2C bus...");
+    {
+        i2c_bus_blocking.lock(|bus| {
+            let mut b = bus.borrow_mut();
+            // Try to scan common addresses
+            for addr in 0x08..=0x77 {
+                let mut dummy = [0u8; 1];
+                if b.read(addr, &mut dummy).is_ok() {
+                    esp_println::println!("  Found device at 0x{:02X}", addr);
+                }
+            }
+        });
+    }
+    esp_println::println!("I2C scan complete\n");
+
+    // Spawn I2C sensor tasks
     spawner.spawn(fuel_gauge_task(i2c_bus_blocking)).ok();
+    spawner.spawn(gps_task(i2c_bus_blocking)).ok();
 
     // Initialize WiFi
-    esp_println::println!("\nInitializing WiFi hardware...");
+    esp_println::println!("Initializing WiFi hardware...");
     use alloc::string::String as AllocString;
 
     let wifi_config = esp_wifi::wifi::Configuration::Client(esp_wifi::wifi::ClientConfiguration {
