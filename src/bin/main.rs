@@ -309,28 +309,40 @@ async fn gps_task(i2c_bus: &'static I2cBusBlocking) {
                     // Read from REG_DATA_STREAM
                     match i2c.write_read(GPS_ADDR, &[REG_DATA_STREAM], &mut buffer[..read_size]) {
                         Ok(_) => {
-                            // Print raw bytes
-                            esp_println::print!("GPS: Received {} bytes", read_size);
-                            if available > read_size {
-                                esp_println::print!(" ({} available, truncated)", available);
+                            // Filter out trailing 0xFF padding bytes
+                            // REG_DATA_STREAM returns 0xFF when no data is available
+                            let mut actual_size = read_size;
+                            while actual_size > 0 && buffer[actual_size - 1] == 0xFF {
+                                actual_size -= 1;
                             }
-                            esp_println::print!(": ");
-                            for i in 0..read_size {
-                                esp_println::print!("{:02X} ", buffer[i]);
-                            }
-                            esp_println::println!();
 
-                            // Parse UBX packets
-                            let mut packets = parser.consume_ubx(&buffer[..read_size]);
+                            if actual_size > 0 {
+                                // Print raw bytes
+                                esp_println::print!("GPS: Received {} bytes", actual_size);
+                                if read_size > actual_size {
+                                    esp_println::print!(" ({} padding bytes stripped)", read_size - actual_size);
+                                }
+                                if available > read_size {
+                                    esp_println::print!(" ({} available, truncated)", available);
+                                }
+                                esp_println::print!(": ");
+                                for i in 0..actual_size {
+                                    esp_println::print!("{:02X} ", buffer[i]);
+                                }
+                                esp_println::println!();
 
-                            // Print parsed packets
-                            while let Some(packet_result) = packets.next() {
-                                match packet_result {
-                                    Ok(packet) => {
-                                        esp_println::println!("GPS: Received packet: {:?}", packet);
-                                    }
-                                    Err(e) => {
-                                        esp_println::println!("GPS: Parser error: {:?}", e);
+                                // Parse UBX packets (only the actual data, not padding)
+                                let mut packets = parser.consume_ubx(&buffer[..actual_size]);
+
+                                // Print parsed packets
+                                while let Some(packet_result) = packets.next() {
+                                    match packet_result {
+                                        Ok(packet) => {
+                                            esp_println::println!("GPS: Received packet: {:?}", packet);
+                                        }
+                                        Err(e) => {
+                                            esp_println::println!("GPS: Parser error: {:?}", e);
+                                        }
                                     }
                                 }
                             }
@@ -620,12 +632,13 @@ async fn main(spawner: Spawner) {
     let led_owned = unsafe { core::ptr::read(led_ref as *const _) };
     spawner.spawn(led_blink_task(led_owned)).ok();
 
-    // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode
-    // Using default frequency (should be 100kHz - MAX17048 supports up to 400kHz, MAX-M10S up to 320kHz)
+    // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode at 400kHz
+    // MAX17048 supports up to 400kHz, MAX-M10S up to 400kHz, ICM-20948 up to 400kHz
     esp_println::println!("Initializing I2C bus...");
     use esp_hal::i2c::master::Config;
-    let i2c_config = Config::default();
-    esp_println::println!("I2C timeout: {:?}", i2c_config.timeout());
+    use esp_hal::time::Rate;
+    let i2c_config = Config::default().with_frequency(Rate::from_khz(400));
+    esp_println::println!("I2C frequency: 400 kHz, timeout: {:?}", i2c_config.timeout());
     let i2c_blocking = I2c::new(peripherals.I2C0, i2c_config)
         .unwrap()
         .with_sda(peripherals.GPIO21)
