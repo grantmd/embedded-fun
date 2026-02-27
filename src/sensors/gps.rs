@@ -103,11 +103,15 @@ pub async fn gps_task(i2c_bus: &'static I2cBusBlocking) {
                                 }
                             }
                         }
-                        Err(_) => {}
+                        Err(e) => {
+                            esp_println::println!("GPS: I2C read error: {:?}", e);
+                        }
                     }
                 }
             }
-            Err(_) => {}
+            Err(e) => {
+                esp_println::println!("GPS: I2C availability check error: {:?}", e);
+            }
         }
 
         // Poll at reasonable interval
