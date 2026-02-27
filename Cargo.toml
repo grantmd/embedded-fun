@@ -28,7 +28,7 @@ esp-storage = { version = "0.5.0", features = ["esp32"] }
 embedded-storage = "0.3.1"
 heapless = "0.8.0"
 max170xx = "1.0.0"
-ublox = { version = "0.7.0", default-features = false, features = ["alloc", "ubx_proto27"] }
+ublox = { version = "0.9.0", default-features = false, features = ["alloc", "ubx_proto27"] }
 icm20948 = "0.0.1"
 
 # Embassy dependencies
