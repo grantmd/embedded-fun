@@ -25,31 +25,18 @@ pub async fn fuel_gauge_task(i2c_bus: &'static I2cBusBlocking) {
     fuel_gauge.quickstart().unwrap();
 
     loop {
-        match fuel_gauge.soc() {
-            Ok(soc) => match fuel_gauge.voltage() {
-                Ok(voltage) => match fuel_gauge.charge_rate() {
-                    Ok(rate) => {
-                        esp_println::println!(
-                            "Battery: {:.1}% | {:.3}V | {:.2}%/hr",
-                            soc,
-                            voltage,
-                            rate
-                        );
-                    }
-                    Err(_) => {
-                        esp_println::println!(
-                            "Battery: {:.1}% | {:.3}V | charge rate error",
-                            soc,
-                            voltage
-                        );
-                    }
-                },
-                Err(_) => {
-                    esp_println::println!("Battery: {:.1}% | voltage read error", soc);
-                }
-            },
-            Err(_) => {
-                esp_println::println!("Battery: SOC read error");
+        let mut reading = || -> Result<_, max170xx::Error<_>> {
+            Ok((fuel_gauge.soc()?, fuel_gauge.voltage()?, fuel_gauge.charge_rate()?))
+        };
+        match reading() {
+            Ok((soc, voltage, rate)) => {
+                esp_println::println!(
+                    "Battery: {:.1}% | {:.3}V | {:.2}%/hr",
+                    soc, voltage, rate
+                );
+            }
+            Err(e) => {
+                esp_println::println!("Battery: read error: {:?}", e);
             }
         }
 
