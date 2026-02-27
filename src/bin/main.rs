@@ -126,10 +126,12 @@ async fn main(spawner: Spawner) {
     });
 
     let timg1 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG1);
+    let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+
     static WIFI_INIT: static_cell::StaticCell<esp_wifi::EspWifiController> =
         static_cell::StaticCell::new();
-    let wifi_init = WIFI_INIT
-        .init(esp_wifi::init(timg1.timer0, esp_hal::rng::Rng::new(peripherals.RNG)).unwrap());
+    let wifi_init = WIFI_INIT.init(esp_wifi::init(timg1.timer0, rng).unwrap());
 
     let (mut controller, wifi_interfaces) =
         esp_wifi::wifi::new(wifi_init, peripherals.WIFI).unwrap();
@@ -141,7 +143,6 @@ async fn main(spawner: Spawner) {
         static_cell::StaticCell::new();
     let resources = RESOURCES.init(embassy_net::StackResources::<3>::new());
 
-    let seed = 1234u64; // Simple seed, could be improved with RNG
     let (stack, runner) = embassy_net::new(wifi_interfaces.sta, config, resources, seed);
 
     static STACK_REF: static_cell::StaticCell<embassy_net::Stack<'static>> =
