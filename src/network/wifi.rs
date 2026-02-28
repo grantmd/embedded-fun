@@ -1,6 +1,6 @@
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 // Signals to notify tasks that WiFi network is ready
 pub static WIFI_CONNECTED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -20,7 +20,7 @@ pub async fn wifi_task(stack: &'static embassy_net::Stack<'static>) {
     loop {
         Timer::after(Duration::from_secs(10)).await;
         if !stack.is_link_up() {
-            esp_println::println!("WiFi connection lost!");
+            esp_println::println!("[{}ms] WiFi: Connection lost!", Instant::now().as_millis());
         }
     }
 }
@@ -34,10 +34,10 @@ pub async fn net_task(
 
 #[embassy_executor::task]
 pub async fn ping_task(stack: &'static embassy_net::Stack<'static>) {
-    esp_println::println!("Ping task waiting for WiFi connection...");
+    esp_println::println!("[{}ms] Ping: Waiting for WiFi...", Instant::now().as_millis());
     WIFI_CONNECTED.wait().await;
 
-    esp_println::println!("WiFi connected! Starting ping loop...");
+    esp_println::println!("[{}ms] Ping: WiFi connected, starting ping loop...", Instant::now().as_millis());
 
     // Wait a bit more to ensure we have an IP address
     Timer::after(Duration::from_secs(2)).await;
@@ -46,13 +46,13 @@ pub async fn ping_task(stack: &'static embassy_net::Stack<'static>) {
 
     loop {
         if !stack.is_link_up() {
-            esp_println::println!("Network down, waiting for connection...");
+            esp_println::println!("[{}ms] Ping: Network down, waiting...", Instant::now().as_millis());
             Timer::after(Duration::from_secs(1)).await;
             continue;
         }
 
         if stack.config_v4().is_none() {
-            esp_println::println!("No IP address yet, waiting...");
+            esp_println::println!("[{}ms] Ping: No IP address yet, waiting...", Instant::now().as_millis());
             Timer::after(Duration::from_secs(1)).await;
             continue;
         }
@@ -67,10 +67,10 @@ pub async fn ping_task(stack: &'static embassy_net::Stack<'static>) {
             .await
         {
             Ok(_) => {
-                esp_println::println!("Ping #{}: 8.8.8.8 is reachable (via DNS query)", seq);
+                esp_println::println!("[{}ms] Ping #{}: 8.8.8.8 reachable", Instant::now().as_millis(), seq);
             }
             Err(e) => {
-                esp_println::println!("Ping #{}: DNS query failed: {:?}", seq, e);
+                esp_println::println!("[{}ms] Ping #{}: DNS query failed: {:?}", Instant::now().as_millis(), seq, e);
             }
         }
 

@@ -1,5 +1,5 @@
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_02::blocking::delay::DelayMs;
 use embedded_hal_02::blocking::i2c::{Read, Write, WriteRead};
 use icm20948::{ICMI2C, ICM20948_CHIP_ADR};
@@ -73,7 +73,7 @@ impl DelayMs<u16> for SimpleDelay {
 
 #[embassy_executor::task]
 pub async fn imu_task(i2c_bus: &'static I2cBusBlocking) {
-    esp_println::println!("Initializing ICM-20948 IMU...");
+    esp_println::println!("[{}ms] IMU: Initializing ICM-20948...", Instant::now().as_millis());
 
     let i2c_v1 = I2cDevice::new(i2c_bus);
     let mut i2c_adapted = I2cAdapter::new(i2c_v1);
@@ -83,15 +83,15 @@ pub async fn imu_task(i2c_bus: &'static I2cBusBlocking) {
     let mut imu = match ICMI2C::<_, _, ICM20948_CHIP_ADR>::new(&mut i2c_adapted) {
         Ok(imu) => imu,
         Err(e) => {
-            esp_println::println!("✗ Failed to create ICM-20948: {:?}", e);
+            esp_println::println!("[{}ms] IMU: Init failed: {:?}", Instant::now().as_millis(), e);
             return;
         }
     };
 
     match imu.init(&mut i2c_adapted, &mut delay) {
-        Ok(_) => esp_println::println!("✓ ICM-20948 initialized"),
+        Ok(_) => esp_println::println!("[{}ms] IMU: ICM-20948 initialized", Instant::now().as_millis()),
         Err(e) => {
-            esp_println::println!("✗ Failed to initialize ICM-20948: {:?}", e);
+            esp_println::println!("[{}ms] IMU: Init failed: {:?}", Instant::now().as_millis(), e);
             return;
         }
     }
@@ -103,16 +103,17 @@ pub async fn imu_task(i2c_bus: &'static I2cBusBlocking) {
                     imu.scale_raw_accel_gyro((ax, ay, az, gx, gy, gz));
 
                 esp_println::println!(
-                    "IMU: Accel({:.3}, {:.3}, {:.3}) m/s² | Gyro({:.3}, {:.3}, {:.3}) rad/s",
+                    "[{}ms] IMU: Accel({:.3}, {:.3}, {:.3}) m/s² | Gyro({:.3}, {:.3}, {:.3}) rad/s",
+                    Instant::now().as_millis(),
                     ax_scaled, ay_scaled, az_scaled,
                     gx_scaled, gy_scaled, gz_scaled
                 );
             }
             Err(e) => {
-                esp_println::println!("IMU: Read error: {:?}", e);
+                esp_println::println!("[{}ms] IMU: Read error: {:?}", Instant::now().as_millis(), e);
             }
         }
 
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after(Duration::from_secs(10)).await;
     }
 }
