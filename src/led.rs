@@ -1,7 +1,10 @@
+use core::sync::atomic::Ordering;
+
 use embassy_time::{Duration, Timer};
 use esp_hal::gpio::Output;
 
 use crate::network::wifi::NETWORK_CONNECTED;
+use crate::sensors::gps::GPS_HAS_FIX;
 
 #[embassy_executor::task]
 pub async fn led_blink_task(mut led: Output<'static>) {
@@ -19,15 +22,30 @@ pub async fn led_blink_task(mut led: Output<'static>) {
                 continue;
             }
             embassy_futures::select::Either::Second(_) => {
-                // WiFi connected! Turn LED on solid
-                led.set_high();
                 break;
             }
         }
     }
 
-    // Keep LED on solid
+    // WiFi connected — now wait for GPS fix too
+    // Slow blink (1s) to indicate "connected, waiting for GPS"
     loop {
-        Timer::after(Duration::from_secs(60)).await;
+        if GPS_HAS_FIX.load(Ordering::Relaxed) {
+            led.set_high();
+            break;
+        }
+        led.toggle();
+        Timer::after(Duration::from_secs(1)).await;
+    }
+
+    // Both connected — keep LED on solid
+    // Periodically check if GPS fix is lost
+    loop {
+        Timer::after(Duration::from_secs(5)).await;
+        if GPS_HAS_FIX.load(Ordering::Relaxed) {
+            led.set_high();
+        } else {
+            led.toggle();
+        }
     }
 }

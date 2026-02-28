@@ -7,7 +7,7 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
 use esp_hal::gpio::Output;
-use esp_hal::i2c::master::{Config, I2c};
+use esp_hal::i2c::master::{BusTimeout, Config, I2c};
 use esp_hal::time::Rate;
 use esp_wifi::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
@@ -79,8 +79,10 @@ async fn main(spawner: Spawner) {
     // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode at 400kHz
     // MAX17048 supports up to 400kHz, MAX-M10S up to 400kHz, ICM-20948 up to 400kHz
     esp_println::println!("Initializing I2C bus...");
-    let i2c_config = Config::default().with_frequency(Rate::from_khz(400));
-    esp_println::println!("I2C frequency: 400 kHz, timeout: {:?}", i2c_config.timeout());
+    let i2c_config = Config::default()
+        .with_frequency(Rate::from_khz(100))
+        .with_timeout(BusTimeout::Maximum);
+    esp_println::println!("I2C frequency: 100 kHz, timeout: {:?}", i2c_config.timeout());
     let i2c_blocking = I2c::new(peripherals.I2C0, i2c_config)
         .unwrap()
         .with_sda(peripherals.GPIO21)
@@ -163,7 +165,7 @@ async fn main(spawner: Spawner) {
 
     esp_println::print!("Connecting to WiFi... ");
     controller.connect_async().await.unwrap();
-    esp_println::println!("Connected!");
+    esp_println::println!("WiFi connected!");
 
     // Main loop
     loop {
