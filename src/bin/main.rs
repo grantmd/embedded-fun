@@ -76,8 +76,8 @@ async fn main(spawner: Spawner) {
     );
     spawner.spawn(led_blink_task(led)).ok();
 
-    // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode at 400kHz
-    // MAX17048 supports up to 400kHz, MAX-M10S up to 400kHz, ICM-20948 up to 400kHz
+    // Initialize I2C bus (GPIO22=SCL, GPIO21=SDA) in blocking mode at 100kHz
+    // Reduced from 400kHz for GPS clock stretching compatibility
     esp_println::println!("Initializing I2C bus...");
     let i2c_config = Config::default()
         .with_frequency(Rate::from_khz(100))
