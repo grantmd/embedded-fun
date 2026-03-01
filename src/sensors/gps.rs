@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_embedded_hal::shared_bus::blocking::i2c::I2cDevice;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
+use embassy_futures::yield_now;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_hal::i2c::I2c;
 
@@ -371,6 +372,7 @@ pub async fn gps_task(i2c_bus: &'static I2cBusBlocking) {
                     }
 
                     draining = true;
+                    yield_now().await;
                     continue;
                 }
                 // All 0xFF — buffer empty, burst over

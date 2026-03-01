@@ -7,6 +7,8 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use esp_hal::i2c::master::I2c;
 use esp_hal::Blocking;
 
+pub mod actuators;
+pub mod control;
 pub mod led;
 pub mod network;
 pub mod sensors;
