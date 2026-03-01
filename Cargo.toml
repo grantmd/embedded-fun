@@ -30,6 +30,7 @@ heapless = "0.8.0"
 max170xx = "1.0.0"
 
 icm20948 = "0.0.1"
+libm = "0.2"
 
 # Embassy dependencies
 embassy-executor = { version = "0.7", features = ["task-arena-size-65536"] }

@@ -63,11 +63,11 @@ pub async fn ping_task(stack: &'static embassy_net::Stack<'static>) {
         seq = seq.wrapping_add(1);
 
         match stack
-            .dns_query("8.8.8.8", embassy_net::dns::DnsQueryType::A)
+            .dns_query("example.com", embassy_net::dns::DnsQueryType::A)
             .await
         {
-            Ok(_) => {
-                esp_println::println!("[{}ms] Ping #{}: 8.8.8.8 reachable", Instant::now().as_millis(), seq);
+            Ok(addrs) => {
+                esp_println::println!("[{}ms] Ping #{}: example.com -> {}", Instant::now().as_millis(), seq, addrs[0]);
             }
             Err(e) => {
                 esp_println::println!("[{}ms] Ping #{}: DNS query failed: {:?}", Instant::now().as_millis(), seq, e);

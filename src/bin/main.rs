@@ -12,7 +12,10 @@ use esp_hal::time::Rate;
 use esp_wifi::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
 use esp32_wifi::led::led_blink_task;
-use esp32_wifi::network::credentials::{get_credentials_from_user, load_credentials};
+use esp32_wifi::network::credentials::{
+    get_api_key_from_user, get_credentials_from_user, load_api_key, load_credentials,
+};
+use esp32_wifi::network::telemetry::telemetry_task;
 use esp32_wifi::network::wifi::{net_task, ping_task, wifi_task};
 use esp32_wifi::sensors::fuel_gauge::fuel_gauge_task;
 use esp32_wifi::sensors::gps::gps_task;
@@ -63,6 +66,30 @@ async fn main(spawner: Spawner) {
             }
         }
     };
+
+    // Load or prompt for ThingSpeak API key
+    esp_println::println!("Loading stored API key...");
+    let api_key = match load_api_key() {
+        Some(key) => {
+            esp_println::println!("✓ Found stored API key");
+            key
+        }
+        None => {
+            esp_println::println!("No stored API key found.");
+            match get_api_key_from_user(&mut uart_rx) {
+                Some(key) => key,
+                None => {
+                    esp_println::println!("Failed to get API key from user");
+                    esp_println::println!("System halted. Please reset to try again.");
+                    #[allow(clippy::empty_loop)]
+                    loop {}
+                }
+            }
+        }
+    };
+
+    static API_KEY: static_cell::StaticCell<heapless::String<48>> = static_cell::StaticCell::new();
+    let api_key_ref: &'static str = API_KEY.init(api_key).as_str();
 
     // Initialize embassy time driver (required before spawning tasks)
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
@@ -141,9 +168,9 @@ async fn main(spawner: Spawner) {
     // Set up embassy-net
     let config = embassy_net::Config::dhcpv4(embassy_net::DhcpConfig::default());
 
-    static RESOURCES: static_cell::StaticCell<embassy_net::StackResources<3>> =
+    static RESOURCES: static_cell::StaticCell<embassy_net::StackResources<5>> =
         static_cell::StaticCell::new();
-    let resources = RESOURCES.init(embassy_net::StackResources::<3>::new());
+    let resources = RESOURCES.init(embassy_net::StackResources::<5>::new());
 
     let (stack, runner) = embassy_net::new(wifi_interfaces.sta, config, resources, seed);
 
@@ -155,6 +182,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net_task(runner)).ok();
     spawner.spawn(wifi_task(stack_ref)).ok();
     spawner.spawn(ping_task(stack_ref)).ok();
+    spawner.spawn(telemetry_task(stack_ref, api_key_ref)).ok();
 
     // Configure and start WiFi
     controller.set_configuration(&wifi_config).unwrap();

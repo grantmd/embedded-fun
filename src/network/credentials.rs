@@ -126,6 +126,79 @@ fn read_line_from_uart(rx: &mut UartRx<'_, Blocking>, buffer: &mut [u8], prompt:
     pos
 }
 
+// --- API Key storage ---
+
+const API_KEY_OFFSET: u32 = 0x9100;
+const MAX_API_KEY_LEN: usize = 48;
+const API_KEY_MAGIC: u32 = 0xCAFEF00D;
+
+pub fn load_api_key() -> Option<String<48>> {
+    let mut storage = FlashStorage::new();
+    let mut buffer = [0u8; 64];
+
+    match storage.read(API_KEY_OFFSET, &mut buffer) {
+        Ok(_) => {
+            let magic = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
+            if magic != API_KEY_MAGIC {
+                return None;
+            }
+            let len = buffer[4] as usize;
+            if len == 0 || len > MAX_API_KEY_LEN {
+                return None;
+            }
+            let key_bytes = &buffer[8..8 + len];
+            let key_str = from_utf8(key_bytes).ok()?;
+            let mut key = String::new();
+            key.push_str(key_str).ok()?;
+            Some(key)
+        }
+        Err(_) => None,
+    }
+}
+
+fn save_api_key(key: &str) -> Result<(), &'static str> {
+    let mut storage = FlashStorage::new();
+    let mut data = heapless::Vec::<u8, 64>::new();
+
+    data.extend_from_slice(&API_KEY_MAGIC.to_le_bytes()).ok();
+    data.push(key.len() as u8).ok();
+    data.push(0).ok(); // reserved
+    data.push(0).ok(); // reserved
+    data.push(0).ok(); // reserved
+    data.extend_from_slice(key.as_bytes()).ok();
+
+    storage
+        .write(API_KEY_OFFSET, data.as_slice())
+        .map_err(|_| "Failed to write API key to flash")
+}
+
+pub fn get_api_key_from_user(rx: &mut UartRx<'_, Blocking>) -> Option<String<48>> {
+    esp_println::println!("\n=== ThingSpeak API Key ===");
+
+    let mut key_buffer = [0u8; MAX_API_KEY_LEN];
+    let key_len = read_line_from_uart(rx, &mut key_buffer, "API Key: ");
+
+    if key_len == 0 {
+        esp_println::println!("Error: API key cannot be empty");
+        return None;
+    }
+
+    let key_str = from_utf8(&key_buffer[..key_len]).ok()?;
+    let mut key = String::new();
+    key.push_str(key_str).ok()?;
+
+    esp_println::println!("Save API key for next boot? (y/n): ");
+    let mut response = [0u8; 1];
+    if rx.read(&mut response).is_ok() && (response[0] == b'y' || response[0] == b'Y') {
+        match save_api_key(key_str) {
+            Ok(_) => esp_println::println!("API key saved to flash"),
+            Err(e) => esp_println::println!("Failed to save API key: {}", e),
+        }
+    }
+
+    Some(key)
+}
+
 pub fn get_credentials_from_user(rx: &mut UartRx<'_, Blocking>) -> Option<WifiCredentials> {
     esp_println::println!("\n=== WiFi Configuration ===");
     esp_println::println!("Please enter WiFi credentials:");
