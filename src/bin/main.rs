@@ -19,6 +19,7 @@ use esp32_wifi::led::led_blink_task;
 use esp32_wifi::network::credentials::{
     get_api_key_from_user, get_credentials_from_user, load_api_key, load_credentials,
 };
+use esp32_wifi::network::ntp::ntp_sync_task;
 use esp32_wifi::network::telemetry::telemetry_task;
 use esp32_wifi::network::wifi::{net_task, ping_task, wifi_task};
 use esp32_wifi::sensors::fuel_gauge::fuel_gauge_task;
@@ -207,6 +208,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(wifi_task(stack_ref)).ok();
     spawner.spawn(ping_task(stack_ref)).ok();
     spawner.spawn(telemetry_task(stack_ref, api_key_ref)).ok();
+    spawner.spawn(ntp_sync_task(stack_ref)).ok();
 
     // Configure and start WiFi
     controller.set_configuration(&wifi_config).unwrap();
