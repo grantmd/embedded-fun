@@ -1,15 +1,49 @@
 use core::str::from_utf8;
 
-use embedded_storage::{ReadStorage, Storage};
+use embassy_embedded_hal::adapter::BlockingAsync;
+use embassy_futures::block_on;
 use esp_hal::uart::UartRx;
 use esp_hal::Blocking;
 use esp_storage::FlashStorage;
 use heapless::String;
+use sequential_storage::cache::NoCache;
+use sequential_storage::map::{MapConfig, MapStorage};
 
-const WIFI_CREDS_OFFSET: u32 = 0x9000;
+/// Flash range: two 4KB pages starting at 0x9000
+const FLASH_RANGE: core::ops::Range<u32> = 0x9000..0xB000;
+
+/// Key assignments
+const KEY_WIFI_SSID: u8 = 0;
+const KEY_WIFI_PASSWORD: u8 = 1;
+const KEY_API_KEY: u8 = 2;
+
 const MAX_SSID_LEN: usize = 32;
 const MAX_PASSWORD_LEN: usize = 64;
-const MAGIC_MARKER: u32 = 0xDEADBEEF;
+const MAX_API_KEY_LEN: usize = 48;
+
+fn flash_store(key: u8, value: &str) -> Result<(), &'static str> {
+    let flash = BlockingAsync::new(FlashStorage::new());
+    let mut storage = MapStorage::<u8, _, _>::new(
+        flash,
+        const { MapConfig::new(FLASH_RANGE) },
+        NoCache::new(),
+    );
+    let mut data_buffer = [0u8; 128];
+    let val: String<64> = String::try_from(value).map_err(|_| "Value too long")?;
+    block_on(storage.store_item(&mut data_buffer, &key, &val))
+        .map_err(|_| "Failed to write to flash")
+}
+
+fn flash_fetch<const N: usize>(key: u8) -> Option<String<N>> {
+    let flash = BlockingAsync::new(FlashStorage::new());
+    let mut storage = MapStorage::<u8, _, _>::new(
+        flash,
+        const { MapConfig::new(FLASH_RANGE) },
+        NoCache::new(),
+    );
+    let mut data_buffer = [0u8; 128];
+    block_on(storage.fetch_item::<String<N>>(&mut data_buffer, &key)).ok()?
+}
 
 #[derive(Debug, Clone)]
 pub struct WifiCredentials {
@@ -17,80 +51,31 @@ pub struct WifiCredentials {
     pub password: String<64>,
 }
 
-impl WifiCredentials {
-    fn new() -> Self {
-        Self {
-            ssid: String::new(),
-            password: String::new(),
-        }
-    }
-
-    fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 8 {
-            return None;
-        }
-
-        let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        if magic != MAGIC_MARKER {
-            return None;
-        }
-
-        let ssid_len = data[4] as usize;
-        let password_len = data[5] as usize;
-
-        if ssid_len > MAX_SSID_LEN || password_len > MAX_PASSWORD_LEN {
-            return None;
-        }
-
-        if data.len() < 8 + ssid_len + password_len {
-            return None;
-        }
-
-        let ssid_bytes = &data[8..8 + ssid_len];
-        let password_bytes = &data[8 + ssid_len..8 + ssid_len + password_len];
-
-        let ssid = from_utf8(ssid_bytes).ok()?;
-        let password = from_utf8(password_bytes).ok()?;
-
-        let mut creds = Self::new();
-        creds.ssid.push_str(ssid).ok()?;
-        creds.password.push_str(password).ok()?;
-
-        Some(creds)
-    }
-
-    fn to_bytes(&self) -> heapless::Vec<u8, 256> {
-        let mut bytes = heapless::Vec::new();
-
-        bytes.extend_from_slice(&MAGIC_MARKER.to_le_bytes()).ok();
-        bytes.push(self.ssid.len() as u8).ok();
-        bytes.push(self.password.len() as u8).ok();
-        bytes.push(0).ok(); // Reserved
-        bytes.push(0).ok(); // Reserved
-        bytes.extend_from_slice(self.ssid.as_bytes()).ok();
-        bytes.extend_from_slice(self.password.as_bytes()).ok();
-
-        bytes
-    }
-}
-
 pub fn load_credentials() -> Option<WifiCredentials> {
-    let mut storage = FlashStorage::new();
-    let mut buffer = [0u8; 256];
-
-    match storage.read(WIFI_CREDS_OFFSET, &mut buffer) {
-        Ok(_) => WifiCredentials::from_bytes(&buffer),
-        Err(_) => None,
+    let ssid: String<32> = flash_fetch(KEY_WIFI_SSID)?;
+    let password: String<64> = flash_fetch(KEY_WIFI_PASSWORD)?;
+    if ssid.is_empty() {
+        return None;
     }
+    Some(WifiCredentials { ssid, password })
 }
 
 fn save_credentials(creds: &WifiCredentials) -> Result<(), &'static str> {
-    let mut storage = FlashStorage::new();
-    let data = creds.to_bytes();
+    flash_store(KEY_WIFI_SSID, creds.ssid.as_str())?;
+    flash_store(KEY_WIFI_PASSWORD, creds.password.as_str())?;
+    Ok(())
+}
 
-    storage
-        .write(WIFI_CREDS_OFFSET, data.as_slice())
-        .map_err(|_| "Failed to write credentials to flash")
+pub fn load_api_key() -> Option<String<48>> {
+    let key: String<48> = flash_fetch(KEY_API_KEY)?;
+    if key.is_empty() {
+        return None;
+    }
+    Some(key)
+}
+
+fn save_api_key(key: &str) -> Result<(), &'static str> {
+    flash_store(KEY_API_KEY, key)
 }
 
 fn read_line_from_uart(rx: &mut UartRx<'_, Blocking>, buffer: &mut [u8], prompt: &str) -> usize {
@@ -124,52 +109,6 @@ fn read_line_from_uart(rx: &mut UartRx<'_, Blocking>, buffer: &mut [u8], prompt:
     }
 
     pos
-}
-
-// --- API Key storage ---
-
-const API_KEY_OFFSET: u32 = 0x9100;
-const MAX_API_KEY_LEN: usize = 48;
-const API_KEY_MAGIC: u32 = 0xCAFEF00D;
-
-pub fn load_api_key() -> Option<String<48>> {
-    let mut storage = FlashStorage::new();
-    let mut buffer = [0u8; 64];
-
-    match storage.read(API_KEY_OFFSET, &mut buffer) {
-        Ok(_) => {
-            let magic = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
-            if magic != API_KEY_MAGIC {
-                return None;
-            }
-            let len = buffer[4] as usize;
-            if len == 0 || len > MAX_API_KEY_LEN {
-                return None;
-            }
-            let key_bytes = &buffer[8..8 + len];
-            let key_str = from_utf8(key_bytes).ok()?;
-            let mut key = String::new();
-            key.push_str(key_str).ok()?;
-            Some(key)
-        }
-        Err(_) => None,
-    }
-}
-
-fn save_api_key(key: &str) -> Result<(), &'static str> {
-    let mut storage = FlashStorage::new();
-    let mut data = heapless::Vec::<u8, 64>::new();
-
-    data.extend_from_slice(&API_KEY_MAGIC.to_le_bytes()).ok();
-    data.push(key.len() as u8).ok();
-    data.push(0).ok(); // reserved
-    data.push(0).ok(); // reserved
-    data.push(0).ok(); // reserved
-    data.extend_from_slice(key.as_bytes()).ok();
-
-    storage
-        .write(API_KEY_OFFSET, data.as_slice())
-        .map_err(|_| "Failed to write API key to flash")
 }
 
 pub fn get_api_key_from_user(rx: &mut UartRx<'_, Blocking>) -> Option<String<48>> {
@@ -217,7 +156,10 @@ pub fn get_credentials_from_user(rx: &mut UartRx<'_, Blocking>) -> Option<WifiCr
     let ssid_str = from_utf8(&ssid_buffer[..ssid_len]).ok()?;
     let password_str = from_utf8(&password_buffer[..password_len]).ok()?;
 
-    let mut creds = WifiCredentials::new();
+    let mut creds = WifiCredentials {
+        ssid: String::new(),
+        password: String::new(),
+    };
     creds.ssid.push_str(ssid_str).ok()?;
     creds.password.push_str(password_str).ok()?;
 

@@ -24,8 +24,8 @@ esp-wifi = { version = "0.15.0", features = [
   "esp32",
   "wifi",
 ] }
-esp-storage = { version = "0.5.0", features = ["esp32"] }
-embedded-storage = "0.3.1"
+esp-storage = { version = "0.5.0", features = ["esp32", "nor-flash"] }
+sequential-storage = { version = "7", features = ["heapless"] }
 heapless = "0.8.0"
 max170xx = "1.0.0"
 
