@@ -21,28 +21,46 @@ const MAX_SSID_LEN: usize = 32;
 const MAX_PASSWORD_LEN: usize = 64;
 const MAX_API_KEY_LEN: usize = 48;
 
-fn flash_store(key: u8, value: &str) -> Result<(), &'static str> {
-    let flash = BlockingAsync::new(FlashStorage::new());
-    let mut storage = MapStorage::<u8, _, _>::new(
-        flash,
+fn new_storage() -> MapStorage<u8, BlockingAsync<FlashStorage>, NoCache> {
+    MapStorage::<u8, _, _>::new(
+        BlockingAsync::new(FlashStorage::new()),
         const { MapConfig::new(FLASH_RANGE) },
         NoCache::new(),
-    );
+    )
+}
+
+/// Erase the entire storage region so sequential-storage starts fresh.
+fn erase_storage() {
+    let mut storage = new_storage();
+    match block_on(storage.erase_all()) {
+        Ok(_) => esp_println::println!("  Storage region erased"),
+        Err(_) => esp_println::println!("  Failed to erase storage region"),
+    }
+}
+
+fn flash_store(key: u8, value: &str) -> Result<(), &'static str> {
+    let mut storage = new_storage();
     let mut data_buffer = [0u8; 128];
     let val: String<64> = String::try_from(value).map_err(|_| "Value too long")?;
-    block_on(storage.store_item(&mut data_buffer, &key, &val))
-        .map_err(|_| "Failed to write to flash")
+    match block_on(storage.store_item(&mut data_buffer, &key, &val)) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            esp_println::println!("  flash_store error for key {}: {:?}", key, e);
+            Err("Failed to write to flash")
+        }
+    }
 }
 
 fn flash_fetch<const N: usize>(key: u8) -> Option<String<N>> {
-    let flash = BlockingAsync::new(FlashStorage::new());
-    let mut storage = MapStorage::<u8, _, _>::new(
-        flash,
-        const { MapConfig::new(FLASH_RANGE) },
-        NoCache::new(),
-    );
+    let mut storage = new_storage();
     let mut data_buffer = [0u8; 128];
-    block_on(storage.fetch_item::<String<N>>(&mut data_buffer, &key)).ok()?
+    match block_on(storage.fetch_item::<String<N>>(&mut data_buffer, &key)) {
+        Ok(val) => val,
+        Err(e) => {
+            esp_println::println!("  flash_fetch error for key {}: {:?}", key, e);
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,12 +70,30 @@ pub struct WifiCredentials {
 }
 
 pub fn load_credentials() -> Option<WifiCredentials> {
-    let ssid: String<32> = flash_fetch(KEY_WIFI_SSID)?;
-    let password: String<64> = flash_fetch(KEY_WIFI_PASSWORD)?;
-    if ssid.is_empty() {
-        return None;
+    // Try to fetch SSID — if it errors (corrupted flash from old format), erase and return None
+    let mut storage = new_storage();
+    let mut data_buffer = [0u8; 128];
+    let ssid_result =
+        block_on(storage.fetch_item::<String<32>>(&mut data_buffer, &KEY_WIFI_SSID));
+    match ssid_result {
+        Err(e) => {
+            esp_println::println!(
+                "  Flash storage corrupted (key {}): {:?} — erasing region",
+                KEY_WIFI_SSID,
+                e
+            );
+            erase_storage();
+            return None;
+        }
+        Ok(None) => return None,
+        Ok(Some(ssid)) => {
+            if ssid.is_empty() {
+                return None;
+            }
+            let password: String<64> = flash_fetch(KEY_WIFI_PASSWORD)?;
+            Some(WifiCredentials { ssid, password })
+        }
     }
-    Some(WifiCredentials { ssid, password })
 }
 
 fn save_credentials(creds: &WifiCredentials) -> Result<(), &'static str> {
