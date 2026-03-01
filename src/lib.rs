@@ -12,6 +12,7 @@ pub mod control;
 pub mod led;
 pub mod network;
 pub mod sensors;
+pub mod storage;
 
 /// Shared blocking I2C bus type used by all sensor tasks.
 pub type I2cBusBlocking = BlockingMutex<CriticalSectionRawMutex, RefCell<I2c<'static, Blocking>>>;

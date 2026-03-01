@@ -6,8 +6,12 @@ use core::cell::RefCell;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_time::{Duration, Timer};
+use embassy_time::Delay;
+use embedded_hal_bus::spi::ExclusiveDevice;
+use embedded_sdmmc::{SdCard, VolumeManager};
 use esp_hal::gpio::Output;
 use esp_hal::i2c::master::{BusTimeout, Config, I2c};
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
 use esp_wifi::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
@@ -20,6 +24,7 @@ use esp32_wifi::network::wifi::{net_task, ping_task, wifi_task};
 use esp32_wifi::sensors::fuel_gauge::fuel_gauge_task;
 use esp32_wifi::sensors::gps::gps_task;
 use esp32_wifi::sensors::imu::imu_task;
+use esp32_wifi::storage::sd_logger::{GpsTimeSource, sd_logger_task};
 use esp32_wifi::I2cBusBlocking;
 
 #[panic_handler]
@@ -142,6 +147,25 @@ async fn main(spawner: Spawner) {
     spawner.spawn(fuel_gauge_task(i2c_bus_blocking)).ok();
     spawner.spawn(gps_task(i2c_bus_blocking)).ok();
     spawner.spawn(imu_task(i2c_bus_blocking)).ok();
+
+    // Initialize SPI for SD card (GPIO18=SCLK, GPIO23=MOSI, GPIO19=MISO, GPIO5=CS)
+    esp_println::println!("Initializing SPI for SD card...");
+    let spi_config = SpiConfig::default().with_frequency(Rate::from_khz(400));
+    let spi = Spi::new(peripherals.SPI2, spi_config)
+        .unwrap()
+        .with_sck(peripherals.GPIO18)
+        .with_mosi(peripherals.GPIO23)
+        .with_miso(peripherals.GPIO19);
+    let sd_cs = Output::new(
+        peripherals.GPIO5,
+        esp_hal::gpio::Level::High,
+        Default::default(),
+    );
+    let spi_device = ExclusiveDevice::new(spi, sd_cs, Delay).unwrap();
+    let sdcard = SdCard::new(spi_device, Delay);
+    let volume_mgr = VolumeManager::new(sdcard, GpsTimeSource);
+    spawner.spawn(sd_logger_task(volume_mgr)).ok();
+    esp_println::println!("✓ SD card task spawned");
 
     // Initialize WiFi
     esp_println::println!("Initializing WiFi hardware...");
